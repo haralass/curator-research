@@ -31,10 +31,12 @@ GitHub: https://github.com/Synvo-ai/FileGram
 Neither paper gives us a ready benchmark. We need to build our own:
 1. **Synthetic messy folders** with known ground-truth organization (we can generate with FileGramEngine if we have API keys)
 2. **T-05 rubric** as human evaluation checklist (directory style, naming, version handling)
-3. **20 Newsgroups / RCV1** for quantitative clustering metrics (NMI, ARI, Silhouette)
+3. **20 Newsgroups / RCV1** for quantitative clustering metrics (NMI, ARI, Silhouette) [Lang 1995; Lewis et al. 2004]
 
-## 🚪 New Doors
-1. **T-05 is adaptable as our evaluation template** — take FileGram's rubric (directory style, naming strategy, duplicate handling) and build our own "Curator Eval Harness" around it. ~2 days work. Could become a dataset contribution.
-2. **FileGramEngine synthetic generation** — run with API keys to create realistic messy file snapshots (20 personas × T-05 = 20 messy folder scenarios). Free ground truth for automated evaluation.
-3. **"Our own benchmark" is a contribution** — no standard benchmark exists for personal file ORGANIZATION (as distinct from retrieval). Creating one = dataset paper for SIGIR/ECIR short paper track.
-4. **FileGram T-05 rubric gaps** — their rubric doesn't mention: uncertainty quantification, conformal prediction sets, per-file memory, or forgetting curves. We can publish a richer evaluation rubric as a research contribution.
+## References
+
+- HippoCamp. (2026). "HippoCamp: A Synthetic Personal File System Benchmark with Question-Answering." arXiv:2604.01221.
+- Synvo-ai. (2026). "FileGram: LLM Episodic and Procedural Memory from Filesystem Behavioral Traces." arXiv:2604.04901. GitHub: https://github.com/Synvo-ai/FileGram.
+- Lang, K. (1995). "Newsweeder: Learning to filter netnews." *Proceedings of the 12th International Conference on Machine Learning (ICML 1995)*, pp. 331–339. (20 Newsgroups dataset.)
+- Lewis, D. D., Yang, Y., Rose, T., & Li, F. (2004). "RCV1: A New Benchmark Collection for Text Categorization Research." *Journal of Machine Learning Research*, 5, 361–397.
+- Campello, R. J. G. B., Moulavi, D., & Sander, J. (2013). "Density-Based Clustering Based on Hierarchical Density Estimates." *PAKDD 2013*, pp. 160–172. DOI: 10.1007/978-3-642-37456-2_14.

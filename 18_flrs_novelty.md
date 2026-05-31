@@ -7,14 +7,14 @@ No paper applies Ebbinghaus decay or SM-2 to file *location* memory as a formal 
 
 ## Critical Prior Art to Cite (NOT invalidating — actually helps)
 
-**Elsweiler, Ruthven & Ma (2007) JASIST** — "Towards Memory Supporting PIM Tools"
-The closest prior art. Names the problem: "failure to recall the specific LOCATION of an object" as a distinct lapse type. 25 participants, 1.43 lapses/person/day. Argues PIM tools should support this. **No mathematical model, no decay function, no scoring.** → FLRS solves the open problem they identified.
+**Elsweiler, Ruthven & Jones (2007) JASIST** — "Towards Memory Supporting PIM Tools"
+The closest prior art. Names the problem: "failure to recall the specific LOCATION of an object" as a distinct lapse type. 25 participants, 1.43 lapses/person/day. Argues PIM tools should support this. **No mathematical model, no decay function, no scoring.** → FLRS solves the open problem they identified. [doi:10.1002/asi.20570]
 
 **Barreau & Nardi (1995) SIGCHI Bulletin** — "Finding and Reminding"
-Files placed as spatial memory cues — "reminding function." No formalization.
+Files placed as spatial memory cues — "reminding function." No formalization. [doi:10.1145/221296.221307]
 
 **Pertzov et al. (2012) PLOS ONE** — "Forgetting What Was Where: Fragility of Object-Location Binding" (UCL)
-Peer-reviewed cognitive science: object-location binding is neurologically distinct and MORE fragile than object identity memory. **Best empirical foundation for FLRS's core claim.** Never crossed into PIM/computing literature.
+Peer-reviewed cognitive science: object-location binding is neurologically distinct and MORE fragile than object identity memory. **Best empirical foundation for FLRS's core claim.** Never crossed into PIM/computing literature. [doi:10.1371/journal.pone.0048214]
 
 ## Near-Misses (cite as related, not prior art)
 
@@ -28,16 +28,21 @@ Peer-reviewed cognitive science: object-location binding is neurologically disti
 ```
 FLRS(f, t) = R(t, f) × A(f) × B(f, t)
 ```
-- R(t,f) = e^(-t/S)  — Ebbinghaus decay of location memory
+- R(t,f) = e^(-t/S)  — Ebbinghaus decay of location memory [Ebbinghaus 1885; Murre & Dros 2015]
 - A(f)   = accessibility penalty (folder depth, naming ambiguity)
-- B(f,t) = SM-2 stability factor (multiplies with each access)
+- B(f,t) = SM-2 stability factor (multiplies with each access) [Wozniak 1990]
 
-**The combination is unique.** Problem documented (Elsweiler 2007), cognitive mechanism confirmed (UCL 2012), but no prior formalization exists.
+**The combination is unique.** Problem documented [Elsweiler et al. 2007], cognitive mechanism confirmed [Pertzov et al. 2012], but no prior formalization exists.
 
 ## Narrative for the Paper
 "Elsweiler et al. (2007) documented that location forgetting is a distinct and prevalent PIM failure mode. Pertzov et al. (2012) confirmed the underlying cognitive mechanism neurologically. Yet no prior work has formalized this process mathematically or built a system that actively intervenes. FLRS is the first."
 
-## 🚪 New Doors
-1. **Pertzov et al. 2012 (PLOS ONE)** — This cognitive science paper is our theoretical bedrock. Are there follow-up papers from the same UCL group that study HOW location memory decays (rate, individual differences)? The decay parameters in our R(t,f) formula should ideally be grounded in empirical neuroscience data, not assumed.
-2. **Elsweiler's diary study (25 participants, 1.43 lapses/day)** — Can we replicate this as Phase 1 of our evaluation, now with a comparison to FLRS-equipped Curator? Direct extension of their 2007 work.
-3. **Matuschak collaboration?** — He's actively working on memory tools (Orbit, mnemonic medium). Curator is the file-system instantiation of ideas he's explored conceptually. Could be a high-profile connection.
+## References
+
+- Elsweiler, D., Ruthven, I., & Jones, C. (2007). "Towards Memory Supporting Personal Information Management Tools." *Journal of the American Society for Information Science and Technology*, 58(7), 924–946. DOI: 10.1002/asi.20570.
+- Barreau, D. K., & Nardi, B. (1995). "Finding and reminding: File organization from the desktop." *ACM SIGCHI Bulletin*, 27(3), 39–43. DOI: 10.1145/221296.221307.
+- Pertzov, Y., Dong, M. Y., Peich, M.-C., & Husain, M. (2012). "Forgetting What Was Where: The Fragility of Object-Location Binding." *PLOS ONE*, 7(10), e48214. DOI: 10.1371/journal.pone.0048214.
+- Ebbinghaus, H. (1885). *Über das Gedächtnis: Untersuchungen zur experimentellen Psychologie*. Duncker & Humblot, Leipzig. (Translated as: Memory: A Contribution to Experimental Psychology, 1913.)
+- Murre, J. M. J., & Dros, J. (2015). "Replication and Analysis of Ebbinghaus' Forgetting Curve." *PLOS ONE*, 10(7), e0120644. DOI: 10.1371/journal.pone.0120644.
+- Wozniak, P. A. (1990). "Optimization of Learning." Master's thesis, University of Technology, Poznan, Poland. (SM-2 algorithm underlying SuperMemo spaced repetition.)
+- Matuschak, A. (2019). "Spaced repetition systems as a medium, not just a tool." https://notes.andymatuschak.org/Spaced_repetition_systems_as_a_medium,_not_just_a_tool.

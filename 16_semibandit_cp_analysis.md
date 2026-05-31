@@ -23,7 +23,7 @@ for each file:
 - **Safety:** τ_t ≤ τ* always w.p. ≥ 1−2/T → sets never chronically too small from day 1
 
 ## Critical Problem: IID Assumption
-Paper assumes data i.i.d. from fixed distribution D. Personal file systems are emphatically non-IID:
+Paper assumes data i.i.d. from fixed distribution D [Angelopoulos et al. 2025]. Personal file systems are emphatically non-IID:
 - Tax season → many tax docs
 - New semester → new course files
 - Distribution shifts over weeks/months
@@ -35,14 +35,17 @@ At 5–100 files/week, meaningful convergence (T=100–1000) takes **months to y
 - Do NOT claim formal regret convergence in the paper for personal use scale
 - **The coverage guarantee is the practical claim**
 
-## 🚪 New Theoretical Contribution Available
+## Open Theoretical Contributions
 Three open problems that would make genuine theoretical contributions:
-1. **Non-IID / distribution shift version of SPS** — blending with Gibbs & Candes (2024) adversarial techniques, but those require full label observation → combination is OPEN
+1. **Non-IID / distribution shift version of SPS** — blending with Gibbs & Candes (2021) adversarial techniques [Gibbs & Candes 2021], but those require full label observation → combination is OPEN
 2. **Small-T finite-sample bounds** non-vacuous at T=50–200 — not in literature
 3. **Revealed preference formalization** — when user picks from constrained set, that's not ground truth — modeling this rigorously is new
 
 Any one of these would upgrade Temporal CP from "application paper" to "theoretical contribution."
 
-## 🚪 New Doors
-1. **Gibbs & Candes (2024)** — adversarial conformal prediction under distribution shift. We need to read this. If we can combine their shift-handling with SPS's semi-bandit structure, that's a SIGML/NeurIPS paper.
-2. **Small-T regime** — no paper gives non-vacuous bounds at T<200. For personal systems this is THE practical regime. An empirical analysis + tighter bound could be a short paper.
+## References
+
+- Angelopoulos, A. N., et al. (2025). "Stochastic Online Conformal Prediction with Semi-Bandit Feedback." *Proceedings of ICML 2025*. arXiv:2405.13268.
+- Gibbs, I., & Candès, E. J. (2021). "Adaptive Conformal Inference Under Distribution Shift." *Advances in Neural Information Processing Systems 34 (NeurIPS 2021)*. arXiv:2106.00170. https://proceedings.neurips.cc/paper_files/paper/2021/hash/0d441de75945e5acbc865406fc9a2559-Abstract.html.
+- Massart, P. (1990). "The Tight Constant in the Dvoretzky-Kiefer-Wolfowitz Inequality." *The Annals of Probability*, 18(3), 1269–1283. DOI: 10.1214/aop/1176990746. (DKW inequality used in SPS bound.)
+- Vovk, V., Gammerman, A., & Shafer, G. (2005). *Algorithmic Learning in a Random World*. Springer. (Foundations of conformal prediction.)

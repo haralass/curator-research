@@ -19,6 +19,7 @@ _Date: 2026-05-30_
 
 ## Key Finding: FileGram (arXiv:2604.04901, April 2026)
 Research framework — NOT a product. Uses LLM episodic/procedural memory from file-system behavioral traces for agent personalization. Conceptually adjacent to File Biography but uses different mechanism (LLM memory channels vs. Markov chain). Must cite and differentiate.
+
 Source: https://arxiv.org/abs/2604.04901
 
 ## Other Notable Entries
@@ -27,8 +28,9 @@ Source: https://arxiv.org/abs/2604.04901
 - **AIOS-LSFS (ICLR 2025)**: Academic prototype, semantic file system via LLM, no clustering.
 - **Sortio**: Cross-platform NLP + rules, offline mode, growing commercial traction.
 
-## 🚪 New Doors Opened
-1. **FileGram benchmark (arXiv:2604.04901)** — they built FileGramEngine for generating synthetic file system workflows. Could we *use their benchmark* to evaluate Curator? Or contribute to it? This could be a collaboration opportunity.
-2. **VaultSort is the closest commercial threat** — but no public API or open benchmarks. If they add HDBSCAN, the gap narrows fast. Priority: publish before they iterate.
-3. **Sparkle's 10M files / 10k users** — they have real usage data. Their failure modes (cloud dependency, no uncertainty) are Curator's opportunity. A user survey comparing satisfaction between cloud-dependent vs local organizers could be a CHI contribution on its own.
-4. **No tool uses macOS Spotlight metadata as retrieval signal** — this gap exists across ALL competitors. This is a specific, citable, exploitable gap.
+## References
+
+- Synvo-ai. (2026). "FileGram: LLM Episodic and Procedural Memory from Filesystem Behavioral Traces." arXiv:2604.04901. https://arxiv.org/abs/2604.04901.
+- Campello, R. J. G. B., Moulavi, D., & Sander, J. (2013). "Density-Based Clustering Based on Hierarchical Density Estimates." *Pacific-Asia Conference on Knowledge Discovery and Data Mining (PAKDD)*, pp. 160–172. DOI: 10.1007/978-3-642-37456-2_14.
+- Cao, F., Ester, M., Qian, W., & Zhou, A. (2006). "Density-Based Clustering over an Evolving Data Stream with Noise." *Proceedings of the 2006 SIAM International Conference on Data Mining (SDM)*. DOI: 10.1137/1.9781611972764.29.
+- Yoon, S. (2025). "FLACON: An Information-Theoretic Approach to Flag-Aware Contextual Clustering for Large-Scale Document Organization." *Entropy*, 27(11), 1133. DOI: 10.3390/e27111133.

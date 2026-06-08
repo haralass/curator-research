@@ -183,6 +183,28 @@ CREATE INDEX idx_candidate_graph_neighbor ON candidate_graph (neighbor_id);
 - SQLite WAL mode keeps it consistent with the `files` table
 - At 100k files × K=10 edges = 1M rows, this is a small table for SQLite
 
+**Scale consideration — must be benchmarked:**
+
+At larger scales, the edge count grows fast:
+
+| Files | K | Edges | Approx. SQLite size | Notes |
+|---|---|---|---|---|
+| 30k | 10 | 300k | ~15MB | Trivial |
+| 100k | 10 | 1M | ~50MB | Fine |
+| 500k | 10 | 5M | ~250MB | Monitor index performance |
+| 1M | 10 | 10M | ~500MB | Requires profiling |
+| 1M | 20 | 20M | ~1GB | **Requires benchmark before adopting K=20 at this scale** |
+
+At 20M edges, the following must be verified before shipping:
+
+- **Write throughput:** Batch inserts during graph population. SQLite WAL handles concurrent reads, but sustained write throughput at this volume needs measurement. Use `INSERT OR REPLACE` with explicit transactions (1000 rows/transaction).
+- **Read latency:** Adjacency lookup (`WHERE file_id = X`) and reverse lookup (`WHERE neighbor_id = X`) — both must return in < 5ms. The `idx_candidate_graph_neighbor` index on `neighbor_id` is required; without it, reverse lookup is O(n).
+- **Storage:** 1GB on the user's disk for a personal file organizer is borderline. If the corpus has 1M chunks (not just files), K must be capped at 10 and edge decay (§4.4) must run aggressively.
+- **Edge decay refresh:** At 20M edges, refreshing all stale edges in one sweep is not acceptable. Decay must be per-context and batched: during Idle Completion, refresh edges for one context shard per session, not the full graph.
+- **Vacuum:** SQLite does not reclaim space from deleted rows automatically. After aggressive deletion (file trash, context archive), run `PRAGMA incremental_vacuum` during Idle Completion to reclaim disk space.
+
+**Decision rule:** The K=20 / 1M-file scenario is Phase 3. For MVP (30k files), K=10 is sufficient and the graph is trivially small. K and scale limits must be re-evaluated as Curator's corpus grows, not assumed safe at all scales.
+
 ### 4.2 Graph Population
 
 The graph is populated incrementally:

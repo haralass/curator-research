@@ -34,9 +34,39 @@ Curator makes three guarantees about every eligible (non-excluded, non-locked) f
 |---|---|---|
 | **Inventory** | Every eligible file is recorded | Layer 1 always |
 | **Minimum Understanding** | Every eligible file eventually reaches Layer 2 sketch | Layer 2, no exception |
-| **Deep Understanding** | Every eligible file that can be extracted eventually reaches Layer 3 | Layer 3, when thermally safe |
+| **Deep Understanding** | Every file whose **target tier is Layer 3** eventually reaches Layer 3 | Layer 3, when thermally safe |
 
 "Eventually" is not "soon." It means: before the file is trashed, renamed beyond recognition, or manually archived. A file ingested today must reach Minimum Understanding within the current session or the next idle window — not within a year.
+
+### 1.1a Target Tier Definition
+
+**Not every file has a target tier of Layer 3.** The target tier is assigned at ingest time based on budget level (R11 §2) and file characteristics. Only files with budget ≥ Medium AND an extractable content type reach Layer 3.
+
+**Extractable** means: Curator can produce a meaningful embedding from the file's content. A file is extractable if it has at least one of:
+- Extractable text (PDF with selectable text, DOCX, TXT, code file)
+- OCR-able image content (scanned PDF, PNG, JPG with text)
+- Structured data with semantic headers (XLSX, CSV with meaningful column names)
+
+**Not extractable** (Layer 2 maximum, no embedding):
+- Binary files with no text content (compiled executables, `.dmg`, `.pkg`, `.zip` without manifest)
+- Corrupt or empty files
+- Files under the minimum size threshold (< 1KB, configurable)
+- Files the user has explicitly excluded from deep indexing
+- `failed_unreadable` files (permanently, after retry exhaustion)
+
+**Target tier by budget level:**
+
+| Budget level | Target tier | Deep Understanding queue? |
+|---|---|---|
+| High (active context) | Layer 3 if extractable | Yes, high priority |
+| Medium (recent/uncertain) | Layer 3 if extractable | Yes, normal priority |
+| Low (dormant) | Layer 2 only | No — re-evaluate if context reactivates |
+| Minimal (duplicate family) | Layer 2 only | No — resolved after deduplication |
+| None (locked/excluded) | Not in system | Not applicable |
+
+**A dormant-context file is not a failed file.** Its target tier is Layer 2. When its context reactivates, its target tier is upgraded to Layer 3 and it enters the Deep Understanding queue automatically.
+
+**An old screenshot is not necessarily extractable.** A screenshot with no detectable text (OCR returns < 20 chars) is flagged `low_content` and assigned Layer 2 maximum — it is not given an embedding, because the embedding would carry almost no information. This is not a failure; it is the correct classification.
 
 ### 1.2 Completeness Ledger
 

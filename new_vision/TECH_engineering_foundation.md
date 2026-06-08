@@ -36,13 +36,19 @@ CREATE TABLE file_path_history (
 );
 
 CREATE TABLE processing_queue (
-    queue_id    TEXT PRIMARY KEY,
-    file_id     TEXT NOT NULL,
-    priority    REAL NOT NULL,   -- 0.6*recency + 0.3*(1/size_mb) + 0.1*access_freq
-    tier        INTEGER DEFAULT 0,  -- which reading tier to attempt
-    enqueued_at TEXT DEFAULT (datetime('now')),
-    status      TEXT DEFAULT 'pending',  -- pending/processing/done/failed
-    worker_id   TEXT
+    queue_id        TEXT    PRIMARY KEY,
+    file_id         TEXT    NOT NULL,
+    priority        REAL    NOT NULL,        -- 0.6*recency + 0.3*(1/size_mb) + 0.1*access_freq
+    tier_target     INTEGER NOT NULL DEFAULT 0,  -- target reading tier (0/1/2 → Layer1/2/3)
+    enqueued_at     TEXT    DEFAULT (datetime('now')),
+    status          TEXT    DEFAULT 'pending',
+    -- status values: pending / processing / paused_thermal / paused_retry / done / failed
+    worker_id       TEXT,
+    attempts        INTEGER NOT NULL DEFAULT 0,
+    next_attempt_at TEXT,                    -- ISO8601, for retry backoff (NULL = no backoff)
+    passport_json   TEXT    NOT NULL         -- JSON blob: serialized OperationPassport
+    -- passport_json is required. enqueue_job() raises UnknownOperationType if missing.
+    -- See TECH_operation_passports_compute_budget.md for schema and registry.
 ) STRICT;
 
 CREATE TABLE staged_files (
@@ -159,6 +165,9 @@ CREATE INDEX idx_files_inode_device ON files(inode, device_id);
 CREATE INDEX idx_files_sha256 ON files(sha256) WHERE sha256 IS NOT NULL;
 CREATE INDEX idx_files_state ON files(state);
 CREATE INDEX idx_files_path ON files(path);
+-- R13: composite dequeue index — worker grabs highest-priority pending job first
+CREATE INDEX idx_queue_dequeue ON processing_queue(status, priority DESC, enqueued_at ASC);
+-- legacy alias kept for any existing references
 CREATE INDEX idx_queue_status_priority ON processing_queue(status, priority DESC);
 CREATE INDEX idx_staged_files_group ON staged_files(group_id);
 CREATE INDEX idx_events_timestamp ON curator_events(timestamp);

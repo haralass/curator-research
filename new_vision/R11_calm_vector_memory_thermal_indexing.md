@@ -35,6 +35,8 @@ Semantic memory in Curator is not a single monolithic vector index. It is a **py
                          └─────────────────────────────┘
 ```
 
+**Critical rule:** Files in locked or excluded paths never enter this pyramid at all. The `ExclusionTrie` intercepts them before ingest — they have zero DB presence, zero identity record, zero vector. The pyramid only contains files that Curator is allowed to know about.
+
 Each layer is independent. A file can exist in Layer 1 without ever reaching Layer 3. The decision of how far a file climbs is governed by the **Semantic Attention Budget** and the **Thermal Governor**.
 
 ---
@@ -45,7 +47,7 @@ Each layer is independent. A file can exist in Layer 1 without ever reaching Lay
 
 **Cost:** trivial  
 **Latency:** microseconds  
-**Always present for every known file**
+**Always present for every known, non-excluded file**
 
 Stores:
 - `inode` + `device_id` (primary identity, never path)
@@ -92,7 +94,7 @@ Stores:
 This layer answers: **which files are semantically similar, what is nearby in meaning.**  
 Used for context boundary detection, soft duplicate detection, group quality scoring.
 
-The backend for this layer is **not yet decided**. See §4 for benchmark plan.
+The backend for this layer is **not yet decided**. See §4 for the VectorIndex abstraction and §5 for the benchmark plan.
 
 ### Layer 4 — Active Context Memory
 
@@ -140,7 +142,9 @@ Not all files deserve the same indexing depth. Curator must allocate compute bud
 | **Medium** | Recent downloads, uncertain group, pending decision | 1–4 |
 | **Low** | Old dormant context, archived course | 1–2 |
 | **Minimal** | Duplicate family (unresolved) | 1 only |
-| **Zero** | Locked folder, excluded path, `failed_unreadable` files | Layer 1 identity only |
+| **None** | Locked folder, excluded path, `failed_unreadable` | Zero — ExclusionTrie blocks before ingest |
+
+**Locked and excluded paths have zero DB presence.** They are not given Layer 1 identity records. They are not in the `files` table. They do not exist to Curator.
 
 ### Budget Assignment Rules
 
@@ -171,17 +175,17 @@ Curator must never make the Mac noticeably hot or slow due to background process
 
 ### 3.1 Prior Art
 
-**macOS `NSProcessInfo.thermalState`** — Apple provides four levels: nominal, fair, serious, critical. At serious/critical, the OS may already throttle apps. Curator should throttle itself earlier.
+**macOS `NSProcessInfo.thermalState`** — Apple provides four levels: `nominal`, `fair`, `serious`, `critical`. On Apple Silicon, there is an important caveat: the `fair` state covers both moderate and heavy thermal pressure, so the granularity between comfortable and actually-throttling is lower than on Intel. Curator must supplement this with CPU load and battery signals to get a more accurate picture. [Source: Apple Developer Documentation + Stan's blog on macOS thermal throttling]
 
-**`IOKit` power source API** — distinguishes battery vs. AC power. On battery, mobile devices should run lighter workloads.
+**`IOKit` power source API** — distinguishes battery vs. AC power, and provides discharge rate. On battery, Curator should default to reduced workload regardless of thermal state.
 
-**Activity Monitor / `ps`-level heuristics** — detect whether heavy apps (Xcode, Chrome, Zoom, Final Cut) are in foreground.
+**`psutil`** — cross-platform Python library providing CPU utilization, memory, and basic battery state. On Apple Silicon, `psutil.sensors_temperatures()` has limited accuracy; `powermetrics` subprocess provides more accurate energy data but requires elevated privileges. For Curator's purposes, `psutil.cpu_percent(interval=1)` is sufficient for load detection without privilege escalation.
 
-**Android Doze mode** — Android's system for deferring background work when the device is idle vs. interactive. Curator needs its own equivalent: **Curator Doze**.
+**Activity Monitor heuristics** — detecting whether heavy apps (Xcode, Chrome, Zoom, Final Cut) are in foreground requires either `NSWorkspace.shared.frontmostApplication` (Swift) or `psutil` process enumeration (Python). Curator should use the Swift side for this signal.
 
-**Linux `ionice` / `nice`** — CPU and I/O priority. Python workers should run at low priority (`nice 19`, `ionice -c 3`) so they yield to user apps.
+**Android Doze mode** — Android's system for deferring background work when device is idle vs. interactive. Curator needs its own equivalent: deferred queue draining during idle periods.
 
-**Kubernetes resource limits** — hard ceiling on CPU/memory per container. Curator workers should self-impose CPU limits.
+**Linux `nice` / `ionice`** — POSIX process priority. All Curator sidecar workers should be launched with `os.nice(15)` to yield CPU to user applications. This is a one-line change with significant thermal impact.
 
 ### 3.2 Thermal States
 
@@ -192,6 +196,8 @@ Curator must never make the Mac noticeably hot or slow due to background process
 | **Reduced** | `thermalState == serious` OR CPU load > 70% sustained | Pause all Tier 2, pause embedding, only Tier 0/1 + identity work |
 | **Paused** | `thermalState == critical` OR user is actively typing/video calling | All extraction paused, only FSEvents + hash + state machine |
 | **Asleep** | Mac screen off, no network, no user activity | Full Tier 2 allowed, maximum concurrency, deferred queue drains |
+
+**Apple Silicon caveat:** Because `fair` covers a wide range on Apple Silicon, Curator should treat `fair` + rising CPU load as equivalent to `serious` rather than waiting for the API to report `serious`.
 
 ### 3.3 Thermal Governor Implementation
 
@@ -225,7 +231,7 @@ import os
 os.nice(15)  # well below interactive priority
 ```
 
-And I/O should use `O_RDONLY` with `F_RDAHEAD` disabled for large files (avoid polluting the page cache).
+And I/O should use `O_RDONLY` with `F_RDAHEAD` disabled for large files to avoid polluting the page cache.
 
 ### 3.5 Integration with R10 Failure Intelligence
 
@@ -268,79 +274,77 @@ Key requirements that any backend must satisfy:
 - **Incremental inserts** — new files arrive daily; full rebuild is not acceptable
 - **Persistent** — index survives restarts without full re-embedding
 - **Local** — no network calls, no cloud API
-- **Apple Silicon** — must run well on M-series chips (ARM NEON / Metal preferred)
+- **Apple Silicon** — must run well on M-series chips (ARM NEON preferred)
 
 ### 4.2 Candidate Backends
 
-#### TurboVec / TurboQuant (RyanCodrai/turbovec)
+#### TurboVec (RyanCodrai/turbovec)
 
-**Claimed:** Rust implementation of Google Research's TurboQuant quantization algorithm for vector compression. Python bindings available.
+**What it actually is:** A Rust vector index with Python bindings, implementing the TurboQuant quantization algorithm from Google Research (ICLR 2026). TurboVec applies TurboQuant to general vector search — this is a separate use from the original paper, which focused on LLM KV cache compression.
 
-**Claimed compression ratio:** 31GB (10M float32 vectors at 384-dim) → ~4GB compressed.
+**Correct compression math (verified):**
+- A 1536-dim float32 vector = 6,144 bytes → compressed to 384 bytes at 2-bit quantization = **16x compression**
+- At 4-bit: 8x compression
+- The README's claim of "10M vectors: 31GB → 4GB" has been independently flagged as inaccurate. The math for 10M × 1536-dim float32 yields ~61GB, not 31GB. The 4GB target requires 2-bit quantization of 1536-dim vectors, which checks out mathematically (~3.8GB). The 31GB baseline does not correspond to any standard embedding dimension.
 
-**Potential fit for Curator:**
-- Reduced RAM for large semantic memory
-- Fast ARM-optimized kernels (potential benefit on Apple Silicon)
-- Filtered search with allowlists (matches Curator's context-scoped search requirement)
-- Online ingest support
-- Pure local
+**Verified features:**
+- Hand-written NEON (ARM) and AVX-512BW (x86) kernels — beats FAISS IndexPQFastScan by 12–20% on ARM
+- Training-free quantization (no codebook, no train phase)
+- Published on PyPI and crates.io (March 2026)
+- Python bindings available
 
-**Open questions — must be answered by benchmark:**
-- Actual recall@10 at Curator's working set sizes (30k, 100k, 1M vectors)?
-- Does quantization hurt context boundary detection quality?
-- Insert/delete latency at sustained 100 files/day ingestion rate?
-- Actual Apple Silicon performance vs. usearch?
-- Memory mapped or RAM-only?
-- Python GIL behavior?
+**Unverified / open questions:**
+- Actual recall@10 at Curator's working set sizes (30k, 100k vectors at 384-dim)
+- Stable external ID support — not confirmed in available docs
+- Deletion support — not confirmed
+- Filtered search (allowlist) — claimed, not independently verified
+- Index persistence behavior — not confirmed
+- The "10M scale is not yet reproduced" by independent analysts as of June 2026
 
-**Current status:** Research-only until benchmark completes.
+**Current status:** Research-only until Curator benchmark. Promising compression approach, but maturity and correctness of key claims require independent verification.
 
 #### usearch (unum-cloud/usearch)
 
-**Production ready.** Used in production by multiple organizations.
+**What it is:** High-performance HNSW vector search library. ARM/x86 optimized. Memory-mapped indexes. Custom quantization (int8, fp16, fp32). Python and Swift bindings.
 
-**Strengths for Curator:**
-- HNSW graph with memory-mapped storage (index can exceed RAM)
-- Custom quantization (int8, fp16, fp32)
-- Stable external ID support
+**Why it is the current default candidate:**
+- Production-ready with documented billion-scale benchmarks
+- Explicit external ID support (not just internal positions)
+- Memory-mapped storage (index can exceed RAM without penalty)
 - Filtered search
-- Apple Silicon optimized (ARM NEON)
-- Python + Swift bindings
-- Active development
+- Apple Silicon ARM NEON optimization
+- Swift bindings (future use in native app layer)
+- Already transitively available in Curator via `unisim`
+- Active development (unum-cloud)
 
-**Current status:** Default candidate for Layer 3. Already transitively available via `unisim`. Benchmark should verify actual memory/latency profile for Curator's workload.
+**Current status:** Default candidate for Layer 3. Benchmark to confirm memory/latency profile at Curator's scale (30k–100k vectors at 384-dim).
 
 #### FAISS (facebookresearch/faiss)
 
-**Battle-tested.** Used in Curator's current pipeline.
+**Current role:** Used in Curator's existing pipeline.
 
-**Weaknesses for Curator:**
-- No stable external IDs (uses internal integer positions — requires separate mapping)
+**Weaknesses for Layer 3:**
+- No stable external IDs (internal positions only — requires separate mapping table)
 - No built-in filtered search
-- Rebuild required for index type changes
-- Heavier dependency
+- IVF index requires periodic rebuild (not truly incremental)
+- No clean deletion
 
-**Current status:** Already in use. Keep as fallback. Likely replaced by usearch for Layer 3.
+**Migration path:** Keep as fallback. Route all vector operations through VectorIndex abstraction. Replace with usearch for Layer 3.
 
-#### sqlite-vec
+#### sqlite-vec (asg017/sqlite-vec)
 
-**Emerging.** SQLite extension for vector search, maintained by Alex Garcia.
+**What it is:** SQLite extension for vector search, written in C with no dependencies. KNN search, multiple distance metrics, SIMD-accelerated. MIT/Apache-2.0 dual licensed. Runs on macOS, iOS, Linux, Windows, WASM.
 
-**Potential fit:**
-- Single-file storage (no separate index file)
-- SQL-native filtering (WHERE context_id = X)
-- Transactional (ACID)
-- Very small dependency
+**Fit for Curator:**
+- SQL-native filtering (`WHERE context_id = X`) — natural fit with FTS5
+- Stable IDs via SQL primary keys
+- Incremental inserts and deletes via SQL
+- No separate index file (vectors live in SQLite)
+- Very light dependency
 
-**Weaknesses:**
-- Slower than dedicated index for large-scale ANN search
-- No HNSW (currently brute-force or simple quantized search)
+**Weakness:** No HNSW — brute-force or basic quantized search. Performance degrades at scale. Suitable for < 50k vectors; likely too slow for > 200k.
 
-**Current status:** Interesting for small-scale search (< 50k vectors) or as complement to FTS5. Benchmark at Curator's scale.
-
-#### Raw fallback
-
-For small corpora (< 5k vectors), cosine similarity via numpy is fast enough and requires no index at all. This is the zero-dependency path for edge cases.
+**Current status:** Phase 2 candidate. Evaluate as complement to FTS5 for small-scale filtered search. Not a replacement for usearch at scale.
 
 ### 4.3 Adoption Decision Rule
 
@@ -350,7 +354,7 @@ Adoption requires passing all of the following Curator-specific checks:
 
 | Check | Threshold |
 |---|---|
-| Recall@10 at 100k vectors | ≥ 0.90 |
+| Recall@10 at 100k vectors (384-dim) | ≥ 0.90 |
 | Insert latency (single file) | ≤ 100ms |
 | Delete latency (single file) | ≤ 50ms |
 | RAM usage at 100k 384-dim vectors | ≤ 500MB |
@@ -359,14 +363,63 @@ Adoption requires passing all of the following Curator-specific checks:
 | Thermal impact during batch insert (100 files) | `thermalState` must not exceed `fair` |
 | Index save/load time | ≤ 5 seconds |
 | Greek filename recall (accent-stripped queries) | ≥ 0.85 |
+| Stable external IDs | Required |
+| True deletion support | Required |
 
 ---
 
-## 5. Semantic Cold Storage
+## 5. Benchmark Plan
+
+### 5.1 Test Corpus
+
+| Scale | Description |
+|---|---|
+| 30k vectors | Current Curator working set |
+| 100k vectors | Medium growth (2–3 years) |
+| 1M vectors | Large scale (chunks, screenshots, versions) |
+| Embedding dim | 384 (default from `unisim` / `paraphrase-multilingual-MiniLM-L12-v2`) |
+| Language mix | Greek filenames 40%, English 50%, mixed 10% |
+| Greeklish queries | 20% of search queries |
+
+### 5.2 Operations Under Test
+
+- **Insert:** single file, batch (100 files), daily incremental (50 files/day for 30 days)
+- **Delete:** single file, batch (10 files)
+- **Search:** unfiltered ANN, filtered by context (allowlist 5k), filtered excluding locked (blocklist 200)
+- **Save/load:** full index persistence
+- **Cold start:** load index after OS restart
+- **Concurrent access:** 2 workers inserting, 1 worker searching simultaneously
+
+### 5.3 Metrics
+
+For each backend × scale × operation:
+- **Latency** (p50, p95, p99)
+- **RAM usage** (RSS before, during, after)
+- **CPU utilization** (sustained, via psutil)
+- **Thermal pressure** (NSProcessInfo.thermalState readings, supplemented with CPU load)
+- **Battery drain** (mWh per 1k operations, on battery, via IOKit)
+- **Recall@k** (k=5, k=10, k=20)
+- **Group quality delta** (does compression degrade Leiden clustering result?)
+- **Context boundary accuracy** (does recall loss cause context merges/splits errors?)
+
+### 5.4 Decision Output
+
+After benchmark, each backend is classified:
+
+| Decision | Meaning |
+|---|---|
+| **MVP** | Adopt immediately for Layer 3 |
+| **Phase 2** | Adopt after MVP launches, pending more profiling |
+| **Research-only** | Promising but not production-ready for Curator |
+| **Reject** | Does not pass Curator-specific requirements |
+
+---
+
+## 6. Semantic Cold Storage
 
 Active and dormant contexts must be handled differently. Storing everything at full resolution forever is not acceptable for a local tool running on a personal Mac.
 
-### 5.1 Cold Storage Model
+### 6.1 Cold Storage Model
 
 When a context becomes dormant (no user activity for > N days, all files in `committed` state):
 
@@ -386,59 +439,12 @@ When a context becomes dormant (no user activity for > N days, all files in `com
 - Curator gradually re-warms the context's Layer 4 budget
 - No user action required
 
-### 5.2 Cold Storage and Benchmark
+### 6.2 Cold Storage and Benchmark
 
-The benchmark (§6) must include a cold storage scenario:
+The benchmark (§5) must include a cold storage scenario:
 - Index with 1M vectors, 950k in cold storage, 50k active
 - Measure: query latency restricted to active only
 - Measure: cold-to-warm reactivation time for a 5k-file context
-
----
-
-## 6. Benchmark Plan
-
-### 6.1 Test Corpus
-
-| Scale | Description |
-|---|---|
-| 30k vectors | Current Curator working set |
-| 100k vectors | Medium growth (2–3 years) |
-| 1M vectors | Large scale (chunks, screenshots, versions) |
-| Embedding dim | 384 (default from `unisim` / `paraphrase-multilingual-MiniLM-L12-v2`) |
-| Language mix | Greek filenames 40%, English 50%, mixed 10% |
-| Greeklish queries | 20% of search queries |
-
-### 6.2 Operations Under Test
-
-- **Insert:** single file, batch (100 files), daily incremental (50 files/day for 30 days)
-- **Delete:** single file, batch (10 files)
-- **Search:** unfiltered ANN, filtered by context (allowlist 5k), filtered excluding locked (blocklist 200)
-- **Save/load:** full index persistence
-- **Cold start:** load index after OS restart
-- **Concurrent access:** 2 workers inserting, 1 worker searching simultaneously
-
-### 6.3 Metrics
-
-For each backend × scale × operation:
-- **Latency** (p50, p95, p99)
-- **RAM usage** (RSS before, during, after)
-- **CPU utilization** (sustained)
-- **Thermal pressure** (NSProcessInfo.thermalState readings)
-- **Battery drain** (mWh per 1k operations, on battery)
-- **Recall@k** (k=5, k=10, k=20)
-- **Group quality delta** (does compression degrade Leiden clustering result?)
-- **Context boundary accuracy** (does recall loss cause context merges/splits errors?)
-
-### 6.4 Decision Output
-
-After benchmark, each backend is classified:
-
-| Decision | Meaning |
-|---|---|
-| **MVP** | Adopt immediately for Layer 3 |
-| **Phase 2** | Adopt after MVP launches, pending more profiling |
-| **Research-only** | Promising but not production-ready for Curator |
-| **Reject** | Does not pass Curator-specific requirements |
 
 ---
 
@@ -460,21 +466,39 @@ After benchmark, each backend is classified:
 | # | Question | Status |
 |---|---|---|
 | Q1 | Which backend passes the Curator benchmark? | Open — requires benchmark |
-| Q2 | What is the correct quantization dimension for 384-dim Greek/English mixed corpus? | Open |
-| Q3 | Does TurboQuant compression cause measurable context boundary detection regression? | Open |
+| Q2 | Does TurboVec support stable external IDs and true deletions? | Open — not confirmed in public docs |
+| Q3 | Does TurboQuant compression cause measurable context boundary detection regression at 384-dim? | Open |
 | Q4 | What is the correct cold-to-warm reactivation latency target? | Open — needs UX input |
 | Q5 | Should Layer 3 be a single shared index or per-context sub-indexes? | Open — depends on filtered search performance |
 | Q6 | What is the correct thermal polling interval? 30s? 60s? | Open — needs profiling |
-| Q7 | Should the Thermal Governor expose controls to the user? | Likely no — fully automatic |
+| Q7 | On Apple Silicon, at what CPU% does the thermal state move from fair to serious in practice? | Open — thermalState granularity is coarse on M-series |
+| Q8 | Is the TurboVec "10M vectors in 4GB" claim reproducible at 384-dim? | Open — README uses 1536-dim; 384-dim numbers not published |
 
 ---
 
 ## Summary
 
 - Curator's semantic memory is a **five-layer pyramid**, not a flat index.
+- **Locked and excluded paths have zero presence in the system.** The pyramid only contains files Curator is allowed to know about.
 - The **Semantic Attention Budget** controls which files climb which layers.
-- The **Thermal Governor** adapts compute load to the Mac's thermal/power state.
-- The **VectorIndex abstraction** allows pluggable backends without locking in TurboVec.
-- **No backend is adopted without passing Curator's benchmark.** TurboVec is a promising candidate, not a committed choice.
+- The **Thermal Governor** adapts compute load to the Mac's thermal/power state. On Apple Silicon, `NSProcessInfo.thermalState` has coarse granularity — `fair` covers a wide range and must be supplemented with CPU load signals.
+- The **VectorIndex abstraction** allows pluggable backends without locking in any specific implementation.
+- **No backend is adopted without passing Curator's benchmark.** TurboVec is a promising candidate with verified compression math (16x at 2-bit, 1536-dim) but unverified behavior at Curator's 384-dim working set and unconfirmed deletion/external-ID support.
+- The TurboQuant paper (ICLR 2026, Google Research) is primarily about LLM KV cache compression. TurboVec applies its quantization approach to general vector search — this is an extension beyond the original paper's scope.
 - Dormant contexts go into **Semantic Cold Storage** and reactivate automatically.
-- The user never sees any of this machinery. They see fast search, calm thermals, and a Mac that stays cool.
+- The user never sees any of this machinery.
+
+---
+
+## Sources
+
+- [turbovec GitHub (RyanCodrai)](https://github.com/RyanCodrai/turbovec)
+- [TurboQuant — Google Research Blog](https://research.google/blog/turboquant-redefining-ai-efficiency-with-extreme-compression/)
+- [TurboQuant — ICLR 2026 paper (OpenReview)](https://openreview.net/pdf?id=tO3ASKZlok)
+- [turbovec & TurboQuant Analysis 2026 — Pebblous (independent analysis)](https://blog.pebblous.ai/report/turbovec-2026/en/)
+- [usearch GitHub (unum-cloud)](https://github.com/unum-cloud/usearch)
+- [usearch Benchmarks](https://github.com/unum-cloud/usearch/blob/main/BENCHMARKS.md)
+- [sqlite-vec GitHub (asg017)](https://github.com/asg017/sqlite-vec)
+- [NSProcessInfo thermalState — Apple Developer Documentation](https://developer.apple.com/documentation/foundation/nsprocessinfo/1417480-thermalstate)
+- [Building a macOS app to know when my Mac is thermal throttling (Stan's blog)](https://stanislas.blog/2025/12/macos-thermal-throttling-app/)
+- [psutil documentation](https://psutil.readthedocs.io/)

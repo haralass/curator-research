@@ -365,3 +365,106 @@ This preserves the existing 30k-file ingested state (FAISS index + SQLite DB) an
 | snfpy removal breaks import in pipeline.py for users with old venv | High | Low — only affects legacy path | try/except import already present (`_SNF_AVAILABLE` flag); pipeline.py never calls SNF in new architecture |
 | send2trash unavailable on some macOS CI runners | Low | Low — test failures only | Fall back to os.unlink in test environment with explicit override |
 | SQLCipher key rotation during migration | Low | High — DB corruption | Never migrate key and schema simultaneously; use separate migration steps |
+
+---
+
+## Section 8: New Modules (R11–R14 + TECH Passports)
+
+These three modules did not exist in the original architecture. They must be created as new files in `engine/curator_sidecar/`. They are not extensions of existing files — they are new responsibilities.
+
+### 8.1 `passports.py` — Operation Passport Registry + PassportGate
+
+**New file:** `engine/curator_sidecar/passports.py`
+
+**What it contains:**
+- `CostTier` enum (`trivial` / `cheap` / `moderate` / `expensive`)
+- `ThermalFloor` enum (`any` / `attentive` / `calm` / `idle`)
+- `OperationPassport` dataclass (12 fields — see `TECH_operation_passports_compute_budget.md`)
+- `PASSPORT_REGISTRY: dict[str, OperationPassport]` — canonical registry of all operation types
+- `passport_gate(passport, thermal, system) → GateDecision` — pre-flight admission check
+- `SystemSnapshot` dataclass — cached system state (thermal, battery, idle, RAM)
+- `GateDecision` enum (`allow` / `defer` / `reject`)
+
+**Integration points:**
+- Called by `db.py` `enqueue_job()` — validates passport at enqueue time
+- Called by processing queue worker loop before every dequeue — gate check
+- Reads from `ThermalGovernor` (R11) for current thermal state
+- Writes `completeness_gain` result back to `files.tier_reached` on job completion
+
+**Build phase:** Layer 0 (must exist before any queue operations)
+
+**Test requirement:** Every entry in `PASSPORT_REGISTRY` must have a unit test confirming `is_valid()` passes and that the gate correctly defers/allows under simulated thermal/battery conditions.
+
+---
+
+### 8.2 `thermal.py` — Thermal Governor + SystemSnapshot
+
+**New file:** `engine/curator_sidecar/thermal.py`
+
+**What it contains:**
+- `ThermalState` enum (`calm` / `attentive` / `reduced` / `paused` / `asleep`)
+- `ThermalGovernor` class:
+  - `current_state() → ThermalState` — polls NSProcessInfo + CPU load + battery
+  - `allowed_workers(tier: int) → int` — max concurrent workers given state
+  - `should_pause_tier(tier: int) → bool`
+  - `register_callback(fn)` — notify subscribers on state change
+- `SystemSnapshot` construction logic — refreshed every 30s
+
+**macOS integration:**
+- `NSProcessInfo.thermalState` via `pyobjc-framework-Foundation`
+- `psutil.cpu_percent(interval=1)` for CPU load supplement
+- `psutil.sensors_battery()` for AC/battery detection
+- `os.nice(15)` called at module import for the sidecar process
+
+**Important:** On Apple Silicon, `thermalState == fair` covers a wide range. `ThermalGovernor` must treat `fair + cpu_percent > 60%` as equivalent to `reduced`, not `attentive`. This is documented in R11 §3.2.
+
+**Build phase:** Layer 0 (required by `passports.py`)
+
+**Test requirement:** Unit tests with mocked `NSProcessInfo` and `psutil` responses. Verify that `fair + high CPU` → `reduced` state.
+
+---
+
+### 8.3 `vector_index.py` — VectorIndex Abstraction
+
+**New file:** `engine/curator_sidecar/vector_index.py`
+
+**What it contains:**
+- `VectorIndex` Protocol (interface) — see R11 §4.1:
+  - `add(file_id, vector)`
+  - `delete(file_id)`
+  - `search(query, k, allowlist, blocklist) → list[tuple[int, float]]`
+  - `save(path)` / `load(path)`
+  - `count() → int`
+- `UsearchVectorIndex` — default implementation backed by `usearch`
+- `NumpyFallbackIndex` — brute-force numpy fallback for small corpora (< 5k vectors) and test environments
+- `get_vector_index(config) → VectorIndex` — factory function, selects backend from `CURATOR_VECTOR_BACKEND` env var
+
+**Why this must exist before embeddings work:**
+The existing `embeddings.py` uses FAISS `IndexIDMap2` directly. This must be replaced with `VectorIndex` calls — `embeddings.py` must not know which backend is running. Without this abstraction, adding TurboVec or any other backend later requires modifying `embeddings.py` internals.
+
+**Relationship to `embeddings.py`:** `embeddings.py` keeps the embedding model (`all-MiniLM-L6-v2`). `vector_index.py` keeps the index. They are separate concerns. `embeddings.py` produces vectors; `vector_index.py` stores and searches them.
+
+**Build phase:** Layer 1 (required before Tier 2 extraction / embedding workers)
+
+**Test requirement:** Both `UsearchVectorIndex` and `NumpyFallbackIndex` must pass the same test suite via the `VectorIndex` Protocol. Tests must verify: add → search finds it, delete → search misses it, allowlist filter works, save/load round-trips correctly.
+
+---
+
+### 8.4 Summary — New Files
+
+| File | Build phase | Depends on | Required by |
+|---|---|---|---|
+| `passports.py` | Layer 0 | `thermal.py` | `db.py` (enqueue), worker loop |
+| `thermal.py` | Layer 0 | `psutil`, `pyobjc` | `passports.py`, `pipeline.py` workers |
+| `vector_index.py` | Layer 1 | `usearch` | `embeddings.py`, `pipeline.py` |
+
+All three must be present and tested before any worker processes files.
+
+### 8.5 Risk Assessment for New Modules
+
+| Risk | Probability | Impact | Mitigation |
+|---|---|---|---|
+| `pyobjc-framework-Foundation` not available in test CI | Medium | Low — thermal tests fail | Mock `NSProcessInfo` in test fixtures; CI skips thermal integration tests |
+| `usearch` wheel not available for Python 3.11 arm64 | Low | High — vector index broken | Verified in `R0_package_verification.md`; `NumpyFallbackIndex` as test fallback |
+| `PASSPORT_REGISTRY` missing entry for a new operation | Medium | Medium — enqueue raises at runtime | Add lint check: every `enqueue_job()` call site must reference a key in `PASSPORT_REGISTRY` |
+| `passport_json` column missing from existing `processing_queue` rows (migration) | Low | Low — migration adds DEFAULT | Schema migration adds `passport_json TEXT NOT NULL DEFAULT '{}'`; worker validates on dequeue |

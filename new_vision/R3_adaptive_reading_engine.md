@@ -871,3 +871,49 @@ Should Curator show files as soon as Tier 0 completes for each file (streaming d
 ---
 
 *Research compiled June 2026. Sources: arXiv 2410.01166 (filename classification), arXiv 2505.17799 (coreset selection), Apple Spotlight Metadata Reference, osxmetadata/RhetTbull, markitdown Microsoft benchmarks (12s/100 pages, CPU), Apple Vision OCR M3 Max (207ms/page community benchmark), go-enry/github-linguist documentation, pdfminer.six GitHub (catalog-based page count), sentence-transformers SBERT documentation, moondream.ai documentation, openpyxl benchmarks, Python os.walk PEP 471.*
+
+---
+
+## Alignment Note — R11 / R13 / TECH_operation_passports (added June 2026)
+
+This section documents how R3's Tier model maps to the later architecture documents. R3 was written before R11 (Semantic Memory Pyramid), R13 (Progressive Completeness), and TECH_operation_passports_compute_budget.md. The Tier system is fully compatible with these documents — the mapping is:
+
+### Tier → Layer mapping
+
+| R3 Tier | What it produces | R11 Layer |
+|---|---|---|
+| Tier 0 | File identity: inode, path, size, mtime, Spotlight metadata | **Layer 1** |
+| Tier 1 | Filename tokens, MIME type, first-page snippet, course codes | **Layer 2 sketch** |
+| Tier 2 | Extracted text body, OCR output, code structure, Excel headers | **Layer 2 sketch (deeper)** |
+| Tier 3 | Semantic embedding (384-dim vector) | **Layer 3** |
+
+Tier 3 = `embed_file` or `embed_batch_idle` in the PASSPORT_REGISTRY.
+
+### Tier → Passport mapping
+
+Every Tier maps to one or more operation types in `PASSPORT_REGISTRY` (TECH_operation_passports_compute_budget.md). Workers must use the passport for the tier they are executing — they do not call a tier directly without a passport:
+
+| R3 Tier | Passport operation_type(s) |
+|---|---|
+| Tier 0 | `tier0_scan` |
+| Tier 1 (text) | `tier1_extract_text` |
+| Tier 1 (headers) | `tier1_extract_headers` |
+| Tier 2 (OCR, single page) | `ocr_single_page` |
+| Tier 2 (OCR, full doc) | `ocr_full_document` |
+| Tier 2 (text extraction) | `tier1_extract_text` (same passport, deeper invocation) |
+| Tier 3 (embed) | `embed_file` or `embed_batch_idle` |
+
+### `max_workers` correction
+
+R3 §1 (Tier 1) states: `ThreadPoolExecutor(max_workers=8)`. This value **must not be hardcoded** in the implementation. The correct source is:
+
+```python
+# Correct — reads from ThermalGovernor (R11 §3.3)
+max_workers = thermal_governor.allowed_workers(tier=1)
+```
+
+`allowed_workers(tier=1)` returns 8 under Calm state, 4 under Attentive, 0 under Reduced/Paused. The R3 value of 8 is the Calm-state default, not a fixed constant.
+
+### Budget gating (R11 §2)
+
+R3 §1 states Tier 2 is invoked for "ambiguous files" and "cluster centroid samples." This must be read together with R11's Semantic Attention Budget: only files with budget ≥ Medium receive Tier 2 invocation. A dormant-context file with Low budget does not enter the Tier 2 queue regardless of classification confidence. The budget system is the gate; R3 describes what happens after the gate opens.

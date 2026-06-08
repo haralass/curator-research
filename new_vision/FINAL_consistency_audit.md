@@ -363,4 +363,53 @@ These rules apply to all R-files and all implementation code:
 
 ---
 
-*Audit complete. 16 conflict entries examined. 13 require file edits. 3 confirmed non-conflicts or already-correct. Four source files need updating. All architectural decisions and data models remain structurally sound — changes are clarifications and corrections, not redesigns.*
+*Original audit complete (R0–R9): 16 conflict entries examined.*
+
+---
+
+## Addendum — R11–R14 + TECH Passports (June 2026)
+
+Conflicts and clarifications identified after the original audit, covering R11 (vector memory), R12 (external tools), R13 (completeness), R14 (candidate graph), and TECH_operation_passports_compute_budget.
+
+| ID | Conflict / Clarification | Files Affected | Status |
+|---|---|---|---|
+| C17 | R3 Tier numbering vs Passport Layer numbering | R3, TECH_passports, FINAL_code_impact | RESOLVED: canonical mapping added to FINAL_code_impact §3 |
+| C18 | `locked` files in old R11 had "Layer 1 identity" | R11 (corrected) | RESOLVED: zero DB presence — corrected in R11 §Architecture + §2 Budget |
+| C19 | FAISS referenced in FINAL_code_impact `embeddings.py` row vs R11/R12/R14 usearch-first | FINAL_code_impact §1, R11 §4.2 | RESOLVED: FAISS kept as fallback/migrate-away; usearch is new default via VectorIndex abstraction |
+| C20 | `candidate_graph` table not in FINAL_code_impact DB migration section | FINAL_code_impact §3 | RESOLVED: added in §3 addendum above |
+| C21 | `processing_queue` schema in TECH_engineering_foundation lacked `passport_json`, `tier_target`, `attempts`, `next_attempt_at`, `paused_thermal`/`paused_retry` status values | TECH_engineering_foundation §A | RESOLVED: TECH_engineering_foundation already updated with all fields |
+| C22 | TurboQuant described as "Google shrank AI memory to 4GB" in early drafts | R11, R12 | RESOLVED: corrected in R11/R12 — TurboQuant is KV cache compression; TurboVec extends it to vector indexes; 31GB baseline is inaccurate |
+| C23 | `NSProcessInfo.thermalState` described as 4 clean levels without Apple Silicon caveat | R11 §3.1 | RESOLVED: caveat documented — `fair` covers both moderate and heavy on M-series; supplement with CPU load |
+
+### C17 Detail — R3 Tier vs Passport Layer
+
+**Potential confusion:** R3 calls the most expensive extraction "Tier 3" (embedding). TECH_passports calls the result of that extraction "Layer 3 completeness." A worker reading both could think they are the same axis.
+
+**Ruling:** They are different axes. Tier = extraction method; Layer = completeness level achieved. Canonical mapping: Tier 0 → Layer 1, Tier 1/2 → Layer 2, Tier 3 → Layer 3. See FINAL_code_impact §3 for the table.
+
+### C18 Detail — `locked` Files and DB Presence
+
+**Original R11 text (incorrect):** "Zero: Locked folder, excluded path → Layer 1 identity only."
+
+**Ruling:** Locked and excluded paths have **zero DB presence**. The `ExclusionTrie` blocks them before ingest. They are not in the `files` table. They are not in the `processing_queue`. They have no vector, no sketch, no identity record. R11 has been corrected.
+
+### C19 Detail — FAISS vs usearch
+
+FAISS remains in `embeddings.py` in the existing codebase. The new architecture routes all vector operations through `VectorIndex` abstraction (`vector_index.py`, Section 8). FAISS is the current live backend that will be migrated. usearch (`UsearchVectorIndex`) is the new default. Both can coexist during transition.
+
+**Global rule:** No new code may call FAISS directly. All new code calls `VectorIndex` methods. The `embeddings.py` migration to `VectorIndex` is a Layer 1 task.
+
+### Global Rules Addendum (R11–R14 + TECH)
+
+| Rule | Violation | Correct |
+|---|---|---|
+| No unregistered operation in queue | `db.enqueue_job(file_id, "my_new_op")` without passport | Add passport to `PASSPORT_REGISTRY` first |
+| No expensive op on battery | `CostTier.EXPENSIVE` + `battery_allowed=True` | Raises in `passport.is_valid()` — fix the passport |
+| No locked/excluded file in DB | Any file in locked path with `files` row | `ExclusionTrie` must block at ingest boundary |
+| No FAISS direct calls in new code | `import faiss` in new modules | Use `VectorIndex` protocol via `vector_index.py` |
+| No `thermalState` without CPU load supplement | Treating `fair` as "comfortable" on Apple Silicon | `fair + cpu > 60%` → `reduced` in `ThermalGovernor` |
+| No K=20 candidate graph at 1M files without benchmark | Setting `K=20` as default in `candidate_graph_update` passport | MVP: K=10; K=20 at 1M files requires R14 §4.1 benchmark |
+
+---
+
+*Addendum complete. 7 new conflict entries (C17–C23). All resolved. No architectural redesigns required — corrections are targeted clarifications to existing decisions.*

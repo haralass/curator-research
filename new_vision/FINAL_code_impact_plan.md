@@ -214,6 +214,38 @@ CREATE VIRTUAL TABLE IF NOT EXISTS files_fts USING fts5(
 ### Tables to deprecate (keep for reference during transition)
 `proposals`, `undo_log` — keep read-only; new code writes to `review_groups` + `wal_intents` + `activity_log`
 
+### New tables from R13/R14/TECH (not in original plan)
+
+```sql
+-- Sparse candidate graph (R14) — top-K semantic neighbors per file
+CREATE TABLE candidate_graph (
+    file_id     INTEGER NOT NULL REFERENCES files(file_id),
+    neighbor_id INTEGER NOT NULL REFERENCES files(file_id),
+    similarity  REAL    NOT NULL,
+    edge_type   TEXT    NOT NULL, -- 'same_context' / 'cross_context' / 'near_duplicate'
+    computed_at INTEGER NOT NULL,
+    PRIMARY KEY (file_id, neighbor_id)
+);
+CREATE INDEX idx_candidate_graph_neighbor ON candidate_graph (neighbor_id);
+-- Scale note: MVP = 30k files × K=10 = ~300k rows (trivial).
+-- At 1M files × K=20 = ~20M rows (~1GB) — benchmark before adopting (R14 §4.1).
+```
+
+The `processing_queue` table in `TECH_engineering_foundation.md` already includes
+`passport_json`, `tier_target`, `attempts`, `next_attempt_at`, and all R13 status values
+(`paused_thermal`, `paused_retry`). No additional changes needed there.
+
+### R3 Tier ↔ Passport Layer canonical mapping
+
+R3 uses "Tier 0–3" for extraction depth. The passport system uses "Layer 1–3" for completeness. These are different axes: Tier = how deep we read; Layer = what we know.
+
+| R3 Tier | Passport operation_type(s) | Completeness gain |
+|---|---|---|
+| Tier 0 (free signals — stat, xattr, mdls) | `tier0_scan` | Layer 1 |
+| Tier 1 (header read — magic bytes, PDF quick info) | `tier1_extract_text`, `tier1_extract_headers` | Layer 2 |
+| Tier 2 (content extraction — OCR, full text) | `ocr_single_page`, `ocr_full_document` | Layer 2 |
+| Tier 3 (embedding — `all-MiniLM-L6-v2`) | `embed_file`, `embed_batch_idle` | Layer 3 |
+
 ---
 
 ## Section 4: Swift UI Changes

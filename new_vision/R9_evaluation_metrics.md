@@ -776,5 +776,57 @@ Currently proposed: 0.70. This threshold has no empirical basis for Curator spec
 
 ---
 
+---
+
+## 11. Operational Pipeline Metrics (R11–R14 + TECH Passports)
+
+These metrics measure Curator's internal engine health — not user-facing value, but engineering correctness. They are monitored internally and surface only when they indicate a problem (R10 failure intelligence model: errors are internal, problems are user-facing).
+
+### 11.1 Completeness Metrics (R13)
+
+| Metric | Formula | Target | Alert threshold |
+|---|---|---|---|
+| **Inventory Coverage** | `files_with_Layer1 / total_eligible_files` | 1.0 (100%) | < 0.99 |
+| **Minimum Understanding Rate** | `files_with_tier_reached ≥ 1 / total_eligible_files` | ≥ 0.95 within 24h of ingest | < 0.80 after 48h |
+| **Deep Understanding Rate** | `files_with_tier_reached = 2 / files_with_target_tier_3` | ≥ 0.90 over lifetime | < 0.70 (stalled queue) |
+| **Completion Debt Trend** | `Σ (target_tier - current_tier) × priority_weight` over time | Decreasing or 0 | Increasing for > 60 min during idle |
+| **Thermal Pause Accumulation** | `COUNT(status = 'paused_thermal') / total_queue_size` | < 0.30 | > 0.70 (system too hot to make progress) |
+| **Retry Accumulation Rate** | `COUNT(attempts ≥ 2) / total_queue_size` | < 0.05 | > 0.15 (systematic extraction failures) |
+
+### 11.2 Thermal Governor Metrics (R11)
+
+| Metric | Measurement | Target | Alert |
+|---|---|---|---|
+| **State Distribution** | % time in each state (Calm/Attentive/Reduced/Paused/Asleep) | Calm ≥ 60% during active use | Paused > 30% of active hours |
+| **Transition Frequency** | State changes per hour | < 6/h (stable) | > 20/h (oscillating = threshold too tight) |
+| **E-Core Utilization** | % of Idle Completion jobs confirmed on E-cores (via `psutil.cpu_affinity` or `powermetrics`) | > 95% | < 80% (workers leaking to P-cores) |
+| **Thermal False Calm** | Jobs that triggered `thermalState > fair` mid-run despite `CALM` passport floor | 0 | Any occurrence → tighten CPU threshold |
+
+### 11.3 PassportGate Metrics (TECH)
+
+| Metric | Formula | Target | Alert |
+|---|---|---|---|
+| **Gate Allow Rate** | `ALLOW / (ALLOW + DEFER + REJECT)` | ≥ 0.70 during Calm state | < 0.30 (too many deferrals — Mac too stressed) |
+| **Defer Reason Distribution** | % of DEFERs by reason (thermal / battery / idle / RAM) | No single reason > 60% | `thermal` > 80% of DEFERs → Mac consistently too hot |
+| **DEFER Storm Detection** | ≥ N consecutive DEFERs with 0 ALLOWs | — | 0 completions in > 30 min during expected idle window |
+| **Reject Rate** | `REJECT / total_gate_calls` | 0 in production | Any REJECT → passport validation bug in code |
+| **Passport Cost Calibration Drift** | `actual_cpu_seconds / estimated_cpu_seconds` per operation type | 0.5–2.0x (within 2x) | > 3x or < 0.3x → update `estimated_cpu_seconds` in registry |
+
+### 11.4 Candidate Graph Metrics (R14)
+
+| Metric | Measurement | Target | Alert |
+|---|---|---|---|
+| **Graph Freshness** | % of edges with `computed_at > 30 days ago` | < 0.20 | > 0.50 (edge decay not running) |
+| **Recall Proxy — Neighbor Stability** | Change in top-K neighbors between successive queries (no file change) | < 0.10 (< 10% churn) | > 0.30 (HNSW degradation, trigger index health check) |
+| **Duplicate Consistency** | Files flagged as near-duplicate by R2 where both are in each other's top-K | ≥ 0.90 | < 0.75 (recall loss affecting duplicate detection) |
+| **Graph Size** | `COUNT(*)` in `candidate_graph` | ≤ MVP target (300k at 30k files) | > 5M rows without expected scale increase (edge decay failure) |
+
+### 11.5 How These Metrics Are Used
+
+These metrics are **never shown to the user directly**. They feed:
+- R10 failure intelligence — thresholds trigger problem cards ("X files need help") or self-healing actions
+- Developer diagnostics — available via `GET /health/full` in debug builds
+- Automated tests — the TECH_testing_safety_validation.md test specs should include metric regression tests (e.g., after a test run, Inventory Coverage must be 1.0, Gate Reject Rate must be 0)
+
 *End of R9 — Evaluation Metrics*  
 *Next: R10 — IRB and Ethics Protocol (see research file 61 for existing notes)*

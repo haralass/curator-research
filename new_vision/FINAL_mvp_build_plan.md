@@ -181,6 +181,8 @@ Work items are ordered by dependency. No layer can begin until its prerequisite 
 - [ ] WAL 4-case crash recovery function: `recover_pending_intents() -> RecoverySummary`
 - [ ] Greek string utilities: `normalize_for_storage(s: str) -> str` (NFC); `normalize_for_search(s: str) -> str` (NFC + accent-strip); `greek_to_latin(s: str) -> str` (Greeklish); `UCY_COURSE_REGEX` constant
 - [ ] FTS5 virtual table + insert/update triggers on `files` and `staged_groups`
+- [ ] **`thermal.py`** — `ThermalGovernor`, `ThermalState` enum, `SystemSnapshot`; polls `NSProcessInfo.thermalState` + `psutil.cpu_percent` + `psutil.sensors_battery()`; `os.nice(15)` at import; Apple Silicon caveat: `fair + cpu > 60%` → `reduced` (see R11 §3.2)
+- [ ] **`passports.py`** — `OperationPassport` dataclass, `CostTier`, `ThermalFloor`, `GateDecision` enums; `PASSPORT_REGISTRY` with all 12 standard operation types; `passport_gate(passport, thermal, system) → GateDecision`; `enqueue_job()` calls `PASSPORT_REGISTRY[op_type]` — raises `UnknownOperationType` if missing (see TECH_operation_passports_compute_budget.md)
 - [ ] Test fixtures: synthetic filesystem factory with 100+ files including Greek filenames, exact duplicates, near-duplicates, zero-byte files, encrypted PDFs
 
 ### Layer 1 — Ingestion
@@ -209,9 +211,10 @@ Work items are ordered by dependency. No layer can begin until its prerequisite 
 
 ### Layer 3 — Embeddings & Rough Grouping
 
+- [ ] **`vector_index.py`** — `VectorIndex` Protocol; `UsearchVectorIndex` (default, usearch HNSW, memory-mapped, external IDs, filtered search); `NumpyFallbackIndex` (brute-force, test environments / < 5k vectors); `get_vector_index(config)` factory from `CURATOR_VECTOR_BACKEND` env var (see R11 §4.1 and FINAL_code_impact_plan §8.3)
 - [ ] `all-MiniLM-L6-v2` embedding: `sentence-transformers` library, MPS device, batch size 32; input = `filename_tokens + content_summary[:256]`; output = 384-dim float32 vector
 - [ ] Embedding cache: store vector in `files.embedding` BLOB; invalidate when `content_summary` changes
-- [ ] FAISS IVFFlat index: build with `faiss.IndexIVFFlat(quantizer, 384, 100)` when ≥100 files embedded; persist to `embeddings.faiss` sidecar file
+- [ ] Vector index via `VectorIndex` abstraction (not FAISS directly): `vector_index.add(file_id, vector)` on embed, `vector_index.search(query, k, allowlist)` for retrieval; persist via `vector_index.save(path)` — **no new direct FAISS calls** (FAISS is the current legacy backend only; migrate to `UsearchVectorIndex`)
 - [ ] `usearch` incremental insert: for delta files after initial index build; sync back to FAISS on next rebuild cycle
 - [ ] Rough group assignment: `faiss.search(embedding, k=1)` → nearest centroid; if `distance <= 0.40` → assign to existing group; else → route to `Review Hub/Uncertain`
 - [ ] `staged_groups` population: one row per proposed group; `group_type` ∈ {duplicate, uncertain, new_context, high_confidence}; `confidence` derived from mean centroid distance → mapped to 1–4 dot scale

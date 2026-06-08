@@ -523,6 +523,149 @@ This checklist must be completed by a human on a real Mac before shipping any bu
 
 ---
 
+## Section 8: New Module Test Specs (thermal.py / passports.py / vector_index.py)
+
+Added June 2026. These modules did not exist when §2–§3 were written.
+
+### thermal.py — ThermalGovernor Tests
+
+```python
+# All NSProcessInfo and psutil calls mocked — no real hardware required
+
+def test_nominal_ac_idle_returns_calm():
+    gov = ThermalGovernor(thermal=NSProcessInfoThermalState.nominal,
+                         cpu_pct=10, on_battery=False, user_idle=True)
+    assert gov.current_state() == ThermalState.CALM
+
+def test_fair_low_cpu_returns_attentive():
+    gov = ThermalGovernor(thermal=NSProcessInfoThermalState.fair,
+                         cpu_pct=30, on_battery=False, user_idle=False)
+    assert gov.current_state() == ThermalState.ATTENTIVE
+
+def test_fair_high_cpu_returns_reduced():
+    # Apple Silicon caveat: fair + cpu > 60% treated as reduced (R11 §3.2)
+    gov = ThermalGovernor(thermal=NSProcessInfoThermalState.fair,
+                         cpu_pct=75, on_battery=False, user_idle=False)
+    assert gov.current_state() == ThermalState.REDUCED
+
+def test_battery_alone_returns_attentive():
+    gov = ThermalGovernor(thermal=NSProcessInfoThermalState.nominal,
+                         cpu_pct=10, on_battery=True, user_idle=False)
+    assert gov.current_state() == ThermalState.ATTENTIVE
+
+def test_critical_returns_paused():
+    gov = ThermalGovernor(thermal=NSProcessInfoThermalState.critical,
+                         cpu_pct=90, on_battery=False, user_idle=False)
+    assert gov.current_state() == ThermalState.PAUSED
+
+def test_allowed_workers_scales_with_state():
+    assert ThermalGovernor(ThermalState.CALM).allowed_workers(tier=1) == 8
+    assert ThermalGovernor(ThermalState.ATTENTIVE).allowed_workers(tier=1) == 4
+    assert ThermalGovernor(ThermalState.REDUCED).allowed_workers(tier=1) == 0
+    assert ThermalGovernor(ThermalState.PAUSED).allowed_workers(tier=1) == 0
+
+def test_callback_fires_on_state_change():
+    fired = []
+    gov = ThermalGovernor(ThermalState.CALM)
+    gov.register_callback(lambda s: fired.append(s))
+    gov._set_state(ThermalState.REDUCED)
+    assert fired == [ThermalState.REDUCED]
+```
+
+### passports.py — PassportGate Tests
+
+```python
+def test_all_registry_passports_are_valid():
+    for op_type, passport in PASSPORT_REGISTRY.items():
+        assert passport.is_valid(), f"Passport for '{op_type}' failed is_valid()"
+
+def test_gate_allows_cheap_op_on_battery():
+    passport = PASSPORT_REGISTRY["tier0_scan"]  # battery_allowed=True, trivial
+    snapshot = SystemSnapshot(on_battery=True, user_idle=False, available_ram_mb=8000,
+                               thermal_state=ThermalState.ATTENTIVE, user_is_active=False)
+    decision = passport_gate(passport, mock_governor(ThermalState.ATTENTIVE), snapshot)
+    assert decision == GateDecision.ALLOW
+
+def test_gate_defers_expensive_op_on_battery():
+    passport = PASSPORT_REGISTRY["ocr_full_document"]  # battery_allowed=False
+    snapshot = SystemSnapshot(on_battery=True, ...)
+    decision = passport_gate(passport, mock_governor(ThermalState.CALM), snapshot)
+    assert decision == GateDecision.DEFER
+
+def test_gate_defers_idle_op_when_user_active():
+    passport = PASSPORT_REGISTRY["embed_batch_idle"]  # requires_idle=True
+    snapshot = SystemSnapshot(user_idle=False, on_battery=False, ...)
+    decision = passport_gate(passport, mock_governor(ThermalState.CALM), snapshot)
+    assert decision == GateDecision.DEFER
+
+def test_gate_defers_when_thermal_floor_not_met():
+    passport = PASSPORT_REGISTRY["ocr_single_page"]  # thermal_floor=CALM
+    decision = passport_gate(passport, mock_governor(ThermalState.ATTENTIVE), ...)
+    assert decision == GateDecision.DEFER
+
+def test_expensive_battery_allowed_raises_at_construction():
+    with pytest.raises(ValueError, match="battery_allowed"):
+        OperationPassport(
+            operation_type="bad_op",
+            cost_tier=CostTier.EXPENSIVE,
+            battery_allowed=True,  # invalid combination
+            # ... other fields
+        ).is_valid()
+
+def test_unknown_operation_type_raises_at_enqueue():
+    with pytest.raises(UnknownOperationType):
+        enqueue_job(file_id=1, operation_type="nonexistent_op")
+```
+
+### vector_index.py — VectorIndex Protocol Tests
+
+Both `UsearchVectorIndex` and `NumpyFallbackIndex` must pass the same suite:
+
+```python
+@pytest.fixture(params=["usearch", "numpy"])
+def vector_index(request, tmp_path):
+    return get_vector_index({"backend": request.param, "path": tmp_path / "idx"})
+
+def test_add_then_search_finds_it(vector_index):
+    vec = np.random.rand(384).astype(np.float32)
+    vector_index.add(file_id=42, vector=vec)
+    results = vector_index.search(query=vec, k=1)
+    assert results[0][0] == 42
+
+def test_delete_removes_from_search(vector_index):
+    vec = np.random.rand(384).astype(np.float32)
+    vector_index.add(file_id=99, vector=vec)
+    vector_index.delete(file_id=99)
+    results = vector_index.search(query=vec, k=5)
+    assert all(fid != 99 for fid, _ in results)
+
+def test_allowlist_restricts_results(vector_index):
+    vecs = {i: np.random.rand(384).astype(np.float32) for i in range(10)}
+    for fid, vec in vecs.items():
+        vector_index.add(file_id=fid, vector=vec)
+    query = vecs[3]
+    results = vector_index.search(query=query, k=5, allowlist=[3, 4, 5])
+    assert all(fid in {3, 4, 5} for fid, _ in results)
+
+def test_save_load_roundtrip(vector_index, tmp_path):
+    vec = np.random.rand(384).astype(np.float32)
+    vector_index.add(file_id=7, vector=vec)
+    vector_index.save(tmp_path / "saved_idx")
+    loaded = get_vector_index({"backend": ..., "path": tmp_path / "saved_idx"})
+    loaded.load(tmp_path / "saved_idx")
+    results = loaded.search(query=vec, k=1)
+    assert results[0][0] == 7
+
+def test_count_reflects_adds_and_deletes(vector_index):
+    for i in range(5):
+        vector_index.add(file_id=i, vector=np.random.rand(384).astype(np.float32))
+    assert vector_index.count() == 5
+    vector_index.delete(file_id=2)
+    assert vector_index.count() == 4
+```
+
+---
+
 ## Design Decisions
 
 1. **WAL written before every filesystem call.** The only way to guarantee recovery is to have a persistent record of intent before touching the disk. This adds one DB write per file operation but makes all crash scenarios deterministic.

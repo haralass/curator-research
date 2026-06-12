@@ -229,7 +229,7 @@ For Curator's practical purposes: any linear classifier (e.g., SGDClassifier in 
 **Nguyen, N. P., Dinh, T. N., Xuan, Y., & Thai, M. T. (2011). Adaptive Algorithms for Detecting Community Structure in Dynamic Social Networks. *Proceedings of INFOCOM 2011*.**
 DOI: https://doi.org/10.1109/INFCOM.2011.5934990
 
-When users make corrections (split/merge), Curator should not re-run full Louvain community detection on the entire 30,000-file graph. Nguyen et al. provide an incremental community detection algorithm that only updates the local neighborhood of affected nodes. For a split correction, only the subgraph containing the split group needs re-partitioning. For a merge, only the two merged communities need their internal edges reconnected.
+When users make corrections (split/merge), Curator should not re-run full Leiden community detection on the entire 30,000-file graph. Nguyen et al. provide an incremental community detection algorithm that only updates the local neighborhood of affected nodes. For a split correction, only the subgraph containing the split group needs re-partitioning. For a merge, only the two merged communities need their internal edges reconnected.
 
 This reduces correction-triggered re-clustering from O(|V| log |V|) to O(|affected_community|²) — a 100x speedup for typical corrections on large filesystems.
 
@@ -303,7 +303,7 @@ For Curator:
 
 The Parasuraman-Sheridan recommendation: **only escalate to a higher automation level when the user is saturated at the current level AND has expressed explicit desire for more automation.** For Curator: the user must explicitly opt in to level 5 (auto with notification) and explicitly opt in again for level 7 (silent auto), per rule. Never automatically escalate automation level.
 
-**Curator decision:** Three automation levels map to Parasuraman-Sheridan levels 3, 5, and 7. Escalation between levels requires explicit per-rule user action. The UI shows each rule's current automation level with a visible control to escalate or de-escalate.
+**Curator decision:** Three automation levels map to Parasuraman-Sheridan levels 3, 5, and 7. Escalation between levels requires explicit per-rule user action. The system tracks automation level internally (L1/L2/L3). Users see behavior in plain language ("suggests only", "applies and notifies", "applies silently") — not numeric level labels. Permission to escalate is via plain-language opt-in, not a level control.
 
 ---
 

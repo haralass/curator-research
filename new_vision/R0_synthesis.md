@@ -45,7 +45,7 @@ INPUT: File event (FSEvents / daily mtime scan / weekly SHA-256 pass)
 │
 ├─[CONTEXT GRAPH]───────────────────────────────────────────────────
 │  FAISS IVFFlat (nlist=100, nprobe=10, k=20) for batch kNN                 (R4)
-│  hnswlib for incremental delta inserts                                     (R4)
+│  usearch for incremental delta inserts (transitive via unisim)        (R4)
 │  Sparse SNF: K=20, 10 iterations, scipy.sparse.csr_matrix                 (R4)
 │  (Full SNF ruled out: 3.6 GB/matrix at 30k files)                         (R4)
 │  6 edge types overlaid (see §6)                                            (R4)
@@ -82,7 +82,7 @@ INPUT: File event (FSEvents / daily mtime scan / weekly SHA-256 pass)
 ├─[COMMIT]──────────────────────────────────────────────────────────
 │  Group-atomic commit with per-file rollback                                (R6)
 │  Every event logged to curator_events (append-only, SQLCipher)            (R8)
-│  Undo window: 90 days active; indefinite archived                          (R6, R8)
+│  Undo window: 90d (staging_move); 180d (commit_move); indefinitely archived (R6, R8)
 │
 ├─[LEARNING]────────────────────────────────────────────────────────
 │  7-state rule machine: observed→candidate→suggested_rule→confirmed_rule    (R5)
@@ -90,6 +90,7 @@ INPUT: File event (FSEvents / daily mtime scan / weekly SHA-256 pass)
 │  N=3 for approve/rename/merge; N=5 for split/mark-wrong                   (R5)
 │  3 automation levels: L1 (suggest only, default), L2 (auto+notify),       (R5)
 │                        L3 (silent auto, ≤5 files)                          (R5)
+│  - L1/L2/L3 are internal classification labels only — not exposed as labeled levels in the UI. (C4)
 │
 └─[FEEDBACK LOOP]───────────────────────────────────────────────────
    LabelSpreading(alpha=0.2) after each review session                       (R5)
@@ -112,8 +113,8 @@ INPUT: File event (FSEvents / daily mtime scan / weekly SHA-256 pass)
 | `fully_understood` | Tier 2/3 complete | Context graph assignment | ~10% reach Tier 2+ (R3) |
 | `grouped` | Leiden community assigned | Staged for review | Min 3 files/community (R4) |
 | `staged_review` | Physical move to Review Hub | User action | `wal_intent` set on `staged_files` row (R6) |
-| `committed` | User commits group | — (terminal) | Physical move to final path (R6) |
-| `ignored` | User locks file/folder | Explicit unlock | Stored in `exclusions` table (R1) |
+| `committed` | User commits group | → `user_corrected` \| → `staged_review` (Phase 2) | Physical move to final path; stable, re-evaluable (R6) |
+| `ignored` | User dismisses file/group from Review Hub | `ignored → user_corrected` | In DB with `ignored` state; distinct from `locked` (never in DB) |
 | `failed_to_read` | Any unrecoverable read error | Manual retry | 10 failure codes; quarantine, not fail-fast (R1) |
 | `user_corrected` | User splits/renames/moves | Re-enters pipeline | Learning signal: weight 2.0–3.0 (R5) |
 
@@ -198,7 +199,7 @@ PRAGMA: `journal_mode=WAL`, `synchronous=NORMAL`, `STRICT`. (R8)
 - Never show Format Twins as duplicate families. (R7)
 
 ### Layer 3 — Context Graph & Community Detection
-- FAISS IVFFlat batch; hnswlib for incremental inserts. (R4)
+- FAISS IVFFlat batch; usearch for incremental inserts (transitive via unisim). (R4)
 - Sparse SNF (K=20, 10 iter, `scipy.sparse.csr_matrix`). (R4)
 - Composite edge weights: semantic 40%, NER 25%, behavioral 20%, provenance 10%, temporal 3%, filename 2%. (R4)
 - Leiden via `leidenalg`; multi-resolution sweep γ=[0.5, 0.75, 1.0, 1.25, 1.5]. (R4)
@@ -281,7 +282,7 @@ PRAGMA: `journal_mode=WAL`, `synchronous=NORMAL`, `STRICT`. (R8)
 | L3: min days / triggers / undo rate / max files | 30 / 20 / <10% / ≤5 | R5 |
 | L3 random audit rate | 1-in-20 | R5 |
 | Max nesting depth in Review Hub | 3 levels | R6 |
-| Undo retention (active / archived) | 90 days / indefinite | R6, R8 |
+| Undo retention (staging_move / commit_move) | 90 days / 180 days; both indefinitely archived | R6, R8 |
 | WAL stuck watchdog interval | 5 min | R1 |
 | Stuck threshold: `new` state | 5 min | R1 |
 | Stuck threshold: `grouped` state | 6 h | R1 |
@@ -388,4 +389,47 @@ Must-link constraints: weight boosted to 0.95. (R4)
 
 ---
 
-*Document length: ~550 lines. Sources: 00, R1–R9.*
+---
+
+## §9 — Supplementary Research Modules (R11–R14)
+
+These modules were added after the initial R0–R10 synthesis. They are **Phase 2** features unless noted. They do not block MVP Layer 0–7.
+
+### R11 — Calm Vector Memory & Thermal-Aware Indexing
+- 5-layer memory pyramid: Identity → Sketch → Compressed → Dynamic → Ephemeral
+- Thermal Governor: IOPMLib state + CPU temperature → dynamically throttle background processing
+- Files climb the pyramid only when thermal budget allows
+- `thermal.py` module: monitors thermals, pauses/resumes workers
+- MVP relevance: thermal monitoring is MVP (prevents Mac overheating during scan)
+
+### R12 — External Research Acceleration Scan
+- Scan Spotlight index, Git repos, browser downloads for provenance signals
+- Feeds Tier 0 reader with richer `kMDItemWhereFroms` data
+- Phase 2 only
+
+### R13 — Progressive Completeness & Thermal-Safe Scan
+- Files get a `completeness_score` (0.0–1.0) based on how much was extracted
+- Scan resumes from last checkpoint on restart (no re-processing)
+- Processing queue ordered by: priority × (1 − completeness) × thermal_headroom
+- MVP relevance: checkpoint/resume behavior is MVP
+
+### R14 — Spatially Sharded Candidate Graph
+- At n>10,000 files, FAISS IVFFlat is partitioned into spatial shards
+- Each shard is a geographic cluster of the embedding space
+- Cross-shard edges only for high-weight relationships
+- Phase 2 only (MVP uses single FAISS IVFFlat index)
+
+### TECH — Operation Passports & Compute Budget
+- Every background job must declare upfront: CPU cost tier, I/O cost tier, reversibility, power requirement, user-presence requirement, completeness value
+- `PassportGate` checks passport against current system state before every job starts
+- If job has no passport → does not run
+- Integrates with Thermal Governor (R11) and processing queue (TECH_engineering_foundation)
+- MVP relevance: passport system is MVP for file move operations (reversibility declaration)
+
+### Integration with MVP Build Plan
+- `thermal.py` → Layer 0 (Infrastructure)
+- `passports.py` + `PassportGate` → Layer 0 (Infrastructure)  
+- `vector_index.py` (FAISS wrapper with progressive completeness) → Layer 1 (Ingestion)
+- R12, R14 → Phase 2
+
+*Document length: ~550 lines. Sources: 00, R1–R14.*

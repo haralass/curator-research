@@ -527,7 +527,7 @@ At the estimated event rate (§7), the activity log is ~15MB after initial scan 
 **Proposed policy:**
 - Full event detail: 1 year
 - Compacted summary: forever (aggregated monthly: "March 2026: 1,247 files organized, 3 groups split, 2 rules created")
-- Undo window: 90 days (events older than 90 days are marked `reversible = 0` automatically)
+- Undo window: 90 days for staging_move events, 180 days for commit_move events (events older than their window are marked `reversible = 0` automatically but are never hard-deleted)
 
 **Compaction:** A background job runs monthly. Events older than 1 year are summarized into a `curator_event_summaries` table and deleted from `curator_events`. Summaries are not reversible — they are historical records only.
 
@@ -725,7 +725,7 @@ All five are covered by the indexes in §1.3. No additional indexes needed at Cu
 
 6. **Group undo is one Cmd+Z step.** A 50-file commit is one undo step. Partial undo (when some files are gone) requires explicit user confirmation. The undo event records which files were and were not restored.
 
-7. **90-day undo window.** Events older than 90 days are marked `reversible = 0` automatically. This is a UX decision: "undo" should feel immediate and reliable, not archaeological. Users wanting to move a file back after 90 days should use drag-and-drop, not undo.
+7. **Two-tier undo window: 90 days for staging_move events, 180 days for commit_move events (R0_open_questions_resolved NB1). Events older than their window are marked `reversible = 0` automatically but are never hard-deleted.** This is a UX decision: "undo" should feel immediate and reliable, not archaeological. Users wanting to move a file back after their window should use drag-and-drop, not undo.
 
 8. **Default explanation is one sentence.** The strongest signal is shown inline. Details drawer shows all signals. This matches the "Trust in Transparency" research finding: one clear reason increases trust; too many reasons create fatigue.
 

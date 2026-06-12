@@ -42,8 +42,8 @@ The following 13 states form the minimal complete set. Each state has a single, 
 | `fully_understood` | All feasible content extracted; file ready for grouping | No |
 | `grouped` | File assigned to one or more groups by the context graph; awaiting staging | No |
 | `staged_review` | File is physically present in `_Curator Review Hub`; user has not yet acted on its group | No |
-| `committed` | User approved group action; file moved/renamed/tagged; final disposition recorded | Yes |
-| `ignored` | User explicitly dismissed this file or its group; no further processing ever | Yes |
+| `committed` | User approved group action; file moved/renamed/tagged; final disposition recorded; stable, re-evaluable | No |
+| `ignored` | User explicitly dismisses a file or group from Review Hub (file has been processed); no further processing ever | Yes |
 | `failed_to_read` | File could not be read after all retry attempts; sent to Review Hub with failure reason | Yes* |
 | `user_corrected` | User manually overrode a group assignment or state; system must not revert | Yes* |
 
@@ -93,6 +93,7 @@ staged_review
 
 committed
   → user_corrected            (user reverses a committed action)
+  → staged_review             (Phase 2: system detects new context evidence — ADWIN signal or Folder Coherence Score drop)
 
 ignored
   → user_corrected            (user re-engages a previously ignored file)
@@ -134,7 +135,7 @@ user_corrected
 | `grouped → staged_review` | Group promoted to Review Hub batch |
 | `staged_review → committed` | User clicks "Accept" or "Move" on group |
 | `staged_review → ignored` | User clicks "Dismiss" on group |
-| `committed → user_corrected` | User undoes a committed action (undo window: configurable, default 48 hours) |
+| `committed → user_corrected` | User undoes a committed action (undo window: 180 days for commit_move events (R0_open_questions_resolved NB1)) |
 
 ---
 
